@@ -1,0 +1,27 @@
+# Secrets & API Keys
+.env
+keys.txt
+*.key
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Output & temp test files
+*.docx
+*.pdf
+*.zip
+temp_doc.xml
+
+# OS generated files
+.DS_Store
+Thumbs.db

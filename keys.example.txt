@@ -1,0 +1,7 @@
+# Danh sách API Keys bí mật cho hệ thống Olympiad Exam Generator
+# Bạn có thể đổi tên tệp này thành 'keys.txt' và dán mỗi key trên 1 dòng
+# Hệ thống sẽ tự động đọc, giấu key và xoay vòng để chống hết hạn ngạch (429) và chống khóa (403).
+
+AIzaSyYourFirstKeyHere
+AIzaSyYourSecondKeyHere
+AIzaSyYourThirdKeyHere
