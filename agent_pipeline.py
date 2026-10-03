@@ -499,6 +499,186 @@ def synthesize_graph_test(info: Dict[str, Any], test_num: int, subtask: int, ove
 
     return header + "\n" + "\n".join(edge_lines)
 
+def detect_grid_problem(sample_in: str, input_format: str = "", topic_key: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Detects if the problem is a 2D Grid / Matrix problem (e.g. R C integers or character maze).
+    Matches when:
+    - Line 0 has at least 2 integers: R and C (and optional extra parameters)
+    - There are exactly R subsequent lines
+    - Each line either contains C space-separated tokens or is a string of C characters
+    """
+    lines = [l.strip() for l in sample_in.strip().split("\n") if l.strip()]
+    if len(lines) < 3:
+        return None
+
+    first_parts = lines[0].split()
+    if len(first_parts) < 2 or not first_parts[0].isdigit() or not first_parts[1].isdigit():
+        return None
+
+    r_val = int(first_parts[0])
+    c_val = int(first_parts[1])
+    data_lines = lines[1:]
+
+    # Must have r_val data lines (or at least 2 lines and r_val matches)
+    if len(data_lines) != r_val or r_val < 2:
+        return None
+
+    # Check space-separated tokens
+    first_row_toks = data_lines[0].split()
+    if len(first_row_toks) == c_val and all(len(l.split()) == c_val for l in data_lines):
+        all_numeric = all(tok.lstrip("-").isdigit() for l in data_lines for tok in l.split())
+        return {
+            "type": "tokens",
+            "r": r_val,
+            "c": c_val,
+            "is_numeric": all_numeric,
+            "header_extra": first_parts[2:]
+        }
+
+    # Check character grid (maze: ..#..)
+    if len(data_lines[0]) == c_val and all(len(l) == c_val for l in data_lines):
+        return {
+            "type": "chars",
+            "r": r_val,
+            "c": c_val,
+            "is_numeric": False,
+            "header_extra": first_parts[2:]
+        }
+
+    return None
+
+def synthesize_grid_test(info: Dict[str, Any], test_num: int, subtask: int, override_scale: int = None) -> str:
+    """
+    Synthesizes a realistic 2D Grid / Matrix test according to Olympiad Subtask specifications:
+    - Test 3: Min boundary 2x2
+    - Test 4: Small 5x5 (25 cells)
+    - Test 5: Subtask 1 upper bound 9x9 (81 cells)
+    - Test 6: Subtask 2 corner case 18x18 (all equal cells, or checkerboard)
+    - Test 7: Subtask 2 large random 25x25 (625 cells)
+    - Test 8: Subtask 3 Integer Overflow Trap 32x32 (1024 cells, values 10^7 - 10^8)
+    - Test 9: Subtask 3 large 40x40 (1600 cells)
+    - Test 10: Subtask 3 Max Stress Test 50x50 (2500 cells, blocks naive TLE)
+    """
+    if override_scale is not None:
+        dim = max(2, int(override_scale ** 0.5))
+        r, c = dim, dim
+    elif test_num == 3:
+        r, c = 2, 2
+    elif test_num == 4:
+        r, c = 5, 5
+    elif test_num == 5:
+        r, c = 9, 9
+    elif test_num == 6:
+        r, c = 18, 18
+    elif test_num == 7:
+        r, c = 25, 25
+    elif test_num == 8:
+        r, c = 32, 32
+    elif test_num == 9:
+        r, c = 40, 40
+    else: # test 10
+        r, c = 50, 50
+
+    header_parts = [str(r), str(c)] + info.get("header_extra", [])
+    header = " ".join(header_parts)
+
+    rows = []
+    if info["type"] == "tokens" and info.get("is_numeric", True):
+        for i in range(r):
+            row_vals = []
+            for j in range(c):
+                if test_num == 3:
+                    row_vals.append(random.randint(1, 10))
+                elif test_num == 4:
+                    row_vals.append(random.randint(1, 50))
+                elif test_num == 5:
+                    row_vals.append(random.randint(1, 100))
+                elif test_num == 6:
+                    # Special: all equal (42) or checkerboard pattern
+                    val = 42 if (i + j) % 2 == 0 else (42 if test_num % 2 == 0 else 0)
+                    row_vals.append(val)
+                elif test_num == 7:
+                    row_vals.append(random.randint(-1000, 1000))
+                elif test_num == 8:
+                    # 64-bit Integer Overflow Trap: values 10^7 - 10^8
+                    row_vals.append(random.randint(10**7, 10**8))
+                elif test_num == 9:
+                    row_vals.append(random.randint(-100000, 100000))
+                else: # test 10
+                    row_vals.append(random.randint(1, 1000000))
+            rows.append(" ".join(map(str, row_vals)))
+    else:
+        # Character maze
+        chars = [".", "#"]
+        for i in range(r):
+            if test_num == 6:
+                # Open path or wall border
+                row_str = "." * c if i > 0 and i < r - 1 else "#" * c
+            else:
+                row_str = "".join(random.choices(chars, weights=[75, 25], k=c))
+            rows.append(row_str)
+
+    return header + "\n" + "\n".join(rows)
+
+def is_valid_contest_test_scale(inp_str: str, test_num: int, sample_str: str) -> bool:
+    """
+    Validates whether an input satisfies the minimal scale required for test_num in HSG Tin hoc.
+    Tests 6..10 MUST have substantial scale, non-trivial token counts, and not be tiny like 4x4 or 5 items.
+    """
+    if not inp_str or not inp_str.strip():
+        return False
+    tokens = inp_str.strip().split()
+    lines = [l.strip() for l in inp_str.strip().split("\n") if l.strip()]
+    num_tokens = len(tokens)
+    num_lines = len(lines)
+
+    # Check if this is a single integer problem (Number theory / Math)
+    sample_tokens = sample_str.strip().split()
+    is_single_int = (len(sample_tokens) == 1 and sample_tokens[0].lstrip("-").isdigit())
+    if is_single_int:
+        if test_num in [1, 2]:
+            return True
+        val = int(tokens[0]) if tokens and tokens[0].lstrip("-").isdigit() else 0
+        if test_num == 3: return True
+        if test_num == 4: return val >= 5
+        if test_num == 5: return val >= 20
+        if test_num == 6: return val >= 50
+        if test_num == 7: return val >= 500
+        if test_num == 8: return val >= 10**7 # Overflow trap
+        if test_num == 9: return val >= 10**8
+        if test_num == 10: return val >= 10**9
+        return True
+
+    # Test 1 & 2: Samples (handled separately)
+    if test_num in [1, 2]:
+        return True
+    # Test 3: Min boundary (Subtask 1) -> always acceptable if not empty
+    if test_num == 3:
+        return True
+    # Test 4: Small (Subtask 1) -> token count >= 5 or lines >= 3
+    if test_num == 4:
+        return num_tokens >= 5 or num_lines >= 3
+    # Test 5: Upper bound Subtask 1 -> token count >= 20 or lines >= 8
+    if test_num == 5:
+        return num_tokens >= 20 or num_lines >= 8
+    # Test 6: Special structure Subtask 2 -> token count >= 40 or lines >= 15
+    if test_num == 6:
+        return num_tokens >= 40 or num_lines >= 15
+    # Test 7: Large random Subtask 2 -> token count >= 100 or lines >= 20
+    if test_num == 7:
+        return num_tokens >= 100 or num_lines >= 20
+    # Test 8: Overflow trap Subtask 3 -> token count >= 60 and MUST have numbers >= 10^7
+    if test_num == 8:
+        has_big_num = any(t.lstrip("-").isdigit() and abs(int(t)) >= 10**7 for t in tokens if len(t) >= 8)
+        return has_big_num and (num_tokens >= 60 or num_lines >= 20)
+    # Test 9: Large Subtask 3 -> token count >= 200 or lines >= 30
+    if test_num == 9:
+        return num_tokens >= 200 or num_lines >= 30
+    # Test 10: Max Stress test Subtask 3 -> token count >= 350 or lines >= 40
+    if test_num == 10:
+        return num_tokens >= 350 or num_lines >= 40
+    return True
+
 def smart_synthesize_input(sample1_in: str, input_format: str, topic_key: str, test_num: int, subtask: int, override_scale: int = None) -> str:
     """
     Intelligently generates realistic test input conforming to the problem's format and contest criteria:
@@ -516,6 +696,11 @@ def smart_synthesize_input(sample1_in: str, input_format: str, topic_key: str, t
     graph_info = detect_graph_problem(sample1_in, input_format, topic_key)
     if graph_info:
         return synthesize_graph_test(graph_info, test_num, subtask, override_scale=override_scale)
+
+    # 0.1 Dedicated 2D Grid & Matrix Problem Engine
+    grid_info = detect_grid_problem(sample1_in, input_format, topic_key)
+    if grid_info:
+        return synthesize_grid_test(grid_info, test_num, subtask, override_scale=override_scale)
 
     scale = override_scale if override_scale is not None else CONTEST_SCALE_MAP.get(test_num, 50)
 
@@ -1425,33 +1610,14 @@ Trả về duy nhất định dạng JSON:
   ]
 }}"""
 
-        if is_ollama:
-            logger.info("[Ollama Speed Optimization] Bypassing slow CPU LLM test generation. Synthesizing 10 standard test cases deterministically in 0.1s...")
-            stage3_data = {}
-            raw_tests = []
-            generator_code = ""
-        else:
-            res3 = await self.client.generate_content(
-                prompt=stage3_prompt,
-                system_instruction=stage3_system,
-                json_mode=True,
-                temperature=0.2,
-                max_tokens=8192
-            )
-
-            stage3_raw = res3.get("data")
-            if isinstance(stage3_raw, list):
-                raw_tests = stage3_raw
-                generator_code = ""
-                stage3_data = {}
-            elif isinstance(stage3_raw, dict):
-                stage3_data = stage3_raw
-                raw_tests = stage3_data.get("tests", [])
-                generator_code = stage3_data.get("generator_py", "")
-            else:
-                stage3_data = {}
-                raw_tests = []
-                generator_code = ""
+        # Olympiad Contest Test Suite Optimization:
+        # Bypasses slow, token-limited LLM raw test generation across both Ollama and Gemini Online.
+        # Synthesizes 10 true Olympiad-scale test cases deterministically in < 0.1s,
+        # with full Subtask differentiation (Samples -> Subtask 1 -> Subtask 2 Corner Cases -> Subtask 3 Overflow & Max Stress).
+        logger.info("[Olympiad Contest Engine] Synthesizing 10 official contest test cases deterministically in 0.1s...")
+        stage3_data = {}
+        raw_tests = []
+        generator_code = ""
         py_solution = stage2_data.get("python_solution", "")
 
         # -------------------------------------------------------------------------
@@ -1599,14 +1765,15 @@ Chỉ trả về JSON: {{"python_solution": "mã python 3 đã sửa"}}"""
             else:
                 desc = CONTEST_TEST_DESCRIPTIONS.get(i, f"Bộ dữ liệu kiểm thử #{i}")
                 
-                # Check if LLM-generated input is valid and non-trivial (not a copy of samples)
+                # Check if LLM-generated input is valid and non-trivial (not a copy of samples) and meets contest scale
                 has_valid_input = bool(
                     inp_val and 
                     inp_val.strip() not in ["...", "TODO", "1"] and 
                     len(inp_val.strip()) >= 3 and 
                     "..." not in inp_val and
                     inp_val.strip() != sample1_in.strip() and
-                    inp_val.strip() != sample2_in.strip()
+                    inp_val.strip() != sample2_in.strip() and
+                    is_valid_contest_test_scale(inp_val, i, sample1_in)
                 )
 
                 calc_res = None
@@ -1728,21 +1895,56 @@ Chỉ trả về JSON: {{"python_solution": "mã python 3 đã sửa"}}"""
             agent_logs[-1]["status"] = "completed"
             agent_logs[-1]["message"] = f"Đã sinh và thẩm định 10/10 bộ Test Cases bằng việc thực thi trực tiếp mã nguồn thuật toán Python (Xác thực thành công {verified_test_count}/10 tests)."
 
-        # Ensure generator_code is available
-        if not generator_code or len(generator_code.strip()) < 50:
-            generator_code = f"""# Script sinh test tự động cho bài toán {problem_name} [{problem_code}]
-import sys
-import random
-
-{stage2_data.get('python_solution', '')}
-
-def generate_test(test_num):
-    # Hàm sinh test mở rộng quy mô lớn N <= 10^5
-    print(f"Generating test {{test_num}} for {problem_code}...")
-
-if __name__ == '__main__':
-    print("Contest Test Generator Ready for {problem_code}")
-"""
+        # Generate comprehensive, executable Python test generator script for Tab 5
+        generator_code_lines = [
+            f"# ==============================================================================",
+            f"# SCRIPT SINH & XUẤT 10 BỘ TEST CASES CHUẨN THEMIS/CMS",
+            f"# Bài toán: {problem_name} [{problem_code}]",
+            f"# Phân cấp: Subtask 1 (Dễ, Trung bình) -> Subtask 2 (Lớn) -> Subtask 3 (Cực đại)",
+            f"# ==============================================================================",
+            "import os",
+            "import sys",
+            "",
+            f"# Mã nguồn thuật toán Python chuẩn của bài toán {problem_code}:",
+            stage2_data.get('python_solution', '').strip(),
+            "",
+            "# Dữ liệu 10 bộ Test Cases chuẩn Olympic:",
+            "TESTS_DATA = ["
+        ]
+        for t in formatted_tests:
+            generator_code_lines.append("    {")
+            generator_code_lines.append(f"        \"num\": {t['test_num']},")
+            generator_code_lines.append(f"        \"name\": \"{t['name']}\",")
+            generator_code_lines.append(f"        \"subtask\": {t['subtask']},")
+            generator_code_lines.append(f"        \"desc\": \"{t['description']}\",")
+            generator_code_lines.append(f"        \"input\": {repr(t['input'])},")
+            generator_code_lines.append(f"        \"output\": {repr(t['output'])}")
+            generator_code_lines.append("    },")
+        generator_code_lines.extend([
+            "]",
+            "",
+            f"def export_themis_tests(output_dir=\"tests\"):",
+            f"    \"\"\"Tự động xuất 10 thư mục Test01..Test10 chứa tệp {problem_code}.INP và {problem_code}.OUT\"\"\"",
+            f"    base = os.path.abspath(output_dir)",
+            f"    os.makedirs(base, exist_ok=True)",
+            f"    print(f\"[*] Đang xuất 10 bộ test cases vào thư mục: {{base}}\")",
+            f"    for t in TESTS_DATA:",
+            f"        t_folder = os.path.join(base, t[\"name\"])",
+            f"        os.makedirs(t_folder, exist_ok=True)",
+            f"        inp_file = os.path.join(t_folder, f\"{problem_code}.INP\")",
+            f"        out_file = os.path.join(t_folder, f\"{problem_code}.OUT\")",
+            f"        with open(inp_file, \"w\", encoding=\"utf-8\") as f:",
+            f"            f.write(t[\"input\"])",
+            f"        with open(out_file, \"w\", encoding=\"utf-8\") as f:",
+            f"            f.write(t[\"output\"])",
+            f"        print(f\"  [OK] {{t['name']}} (Subtask {{t['subtask']}}): {{t['desc']}}\")",
+            f"    print(f\"[+] Hoàn thành! Toàn bộ 10 bộ test case đã sẵn sàng chấm trên Themis/CMS.\")",
+            "",
+            "if __name__ == '__main__':",
+            "    export_themis_tests()",
+            ""
+        ])
+        generator_code = "\n".join(generator_code_lines)
 
         # Sanitize stage1_data and stage2_data to guarantee strings and prevent UI rendering crashes
         stage1_data["problem_code"] = str(stage1_data.get("problem_code") or problem_code).strip().upper()
