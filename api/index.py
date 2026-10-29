@@ -1,23 +1,17 @@
 import os
 import sys
+import logging
 
 # Ensure root directory is in sys.path so modules can be imported inside Vercel serverless environment
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-import json
-import logging
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from agent_pipeline import OlympiadAgentPipeline, TOPIC_DETAILS, DIFFICULTY_DETAILS
-from gemini_client import GeminiClient
-from key_manager import KeyManager
-from exporter import create_themis_zip
-from docx_exporter import create_olympiad_docx
-from server import SAMPLE_DEMO_DATA
+from sample_data import SAMPLE_DEMO_DATA
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -29,6 +23,17 @@ app = FastAPI(title="Olympiad Problem Forge", redirect_slashes=False, docs_url=N
 # Mount static folder
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# Edge Cache Headers Constants
+CACHE_STATIC_HEADERS = {
+    "Cache-Control": "public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800",
+    "X-Edge-Cache": "HIT"
+}
+
+CACHE_HTML_HEADERS = {
+    "Cache-Control": "public, max-age=0, s-maxage=0, must-revalidate",
+    "Pragma": "no-cache"
+}
 
 def get_index_html():
     index_path = os.path.join(STATIC_DIR, "index.html")
@@ -45,14 +50,7 @@ def get_index_html():
 @app.get("/api/index.py", response_class=HTMLResponse)
 async def index():
     html = get_index_html()
-    return HTMLResponse(
-        content=html,
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0"
-        }
-    )
+    return HTMLResponse(content=html, headers=CACHE_HTML_HEADERS)
 
 # SPA fallback handler: any non-API GET request loads index.html instead of {"detail":"Not Found"}
 @app.exception_handler(404)
@@ -65,19 +63,14 @@ async def custom_404_handler(request: Request, exc):
         file_subpath = path[len("/static/"):]
         file_path = os.path.join(STATIC_DIR, file_subpath)
         if os.path.exists(file_path):
-            return FileResponse(file_path)
-    return HTMLResponse(
-        content=get_index_html(),
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0"
-        }
-    )
+            return FileResponse(file_path, headers=CACHE_STATIC_HEADERS)
+    return HTMLResponse(content=get_index_html(), headers=CACHE_HTML_HEADERS)
 
 @app.get("/favicon.ico")
 async def favicon():
     fav_path = os.path.join(STATIC_DIR, "favicon.ico")
     if os.path.exists(fav_path):
-        return FileResponse(fav_path)
+        return FileResponse(fav_path, headers=CACHE_STATIC_HEADERS)
     return Response(status_code=204)
 
 @app.get("/app.js")
@@ -86,7 +79,7 @@ async def favicon():
 async def serve_app_js():
     js_path = os.path.join(STATIC_DIR, "app.js")
     if os.path.exists(js_path):
-        return FileResponse(js_path, media_type="application/javascript")
+        return FileResponse(js_path, media_type="application/javascript", headers=CACHE_STATIC_HEADERS)
     return Response(status_code=404)
 
 @app.get("/style.css")
@@ -95,12 +88,14 @@ async def serve_app_js():
 async def serve_style_css():
     css_path = os.path.join(STATIC_DIR, "style.css")
     if os.path.exists(css_path):
-        return FileResponse(css_path, media_type="text/css")
+        return FileResponse(css_path, media_type="text/css", headers=CACHE_STATIC_HEADERS)
     return Response(status_code=404)
 
 @app.get("/api/topics")
 @app.get("/topics")
 async def get_topics():
+    # Lazy import topic and difficulty details on first request
+    from agent_pipeline import TOPIC_DETAILS, DIFFICULTY_DETAILS
     gemini_models = [
         {"id": "gemini-3.6-flash", "name": "Google Gemini 3.6 Flash (Khuyên dùng Cloud - Nhanh & Chuẩn)", "default": True},
         {"id": "gemini-2.5-flash", "name": "Google Gemini 2.5 Flash", "default": False},
@@ -140,6 +135,7 @@ async def get_sample_data():
 @app.get("/keys/status")
 async def get_keys_status():
     try:
+        from key_manager import KeyManager
         km = KeyManager.from_server_env()
         summary = km.get_status_summary()
         return JSONResponse({
@@ -157,6 +153,7 @@ async def get_keys_status():
 @app.get("/keys/load-server-keys")
 async def load_server_keys():
     try:
+        from key_manager import KeyManager
         km = KeyManager.from_server_env()
         return JSONResponse({
             "success": True,
@@ -175,6 +172,8 @@ async def verify_key(request: Request):
     except Exception:
         body = {}
     model = (body.get("model") or "gemini-3.6-flash").strip()
+    from key_manager import KeyManager
+    from gemini_client import GeminiClient
     km = KeyManager.from_server_env()
     if km.total_count() == 0:
         return JSONResponse({
@@ -193,6 +192,8 @@ async def verify_pool(request: Request):
     except Exception:
         body = {}
     model = (body.get("model") or "gemini-3.6-flash").strip()
+    from key_manager import KeyManager
+    from gemini_client import GeminiClient
     km = KeyManager.from_server_env()
     if km.total_count() == 0:
         return JSONResponse({
@@ -219,6 +220,11 @@ async def generate_problem(request: Request):
         custom_theme = body.get("custom_theme", "").strip()
         problem_code = (body.get("problem_code") or body.get("problem_code_preference") or "").strip()
         io_mode = body.get("io_mode", "file")
+
+        # Lazy import heavy pipeline and client libraries
+        from key_manager import KeyManager
+        from gemini_client import GeminiClient
+        from agent_pipeline import OlympiadAgentPipeline
 
         km = KeyManager.from_server_env()
         if km.total_count() == 0:
@@ -264,6 +270,9 @@ async def download_zip(request: Request):
         problem_code = data.get("problem", {}).get("problem_code", "PROBLEM").upper()
         io_mode = data.get("io_mode", "file")
 
+        # Lazy import ZIP exporter
+        from exporter import create_themis_zip
+
         zip_bytes = create_themis_zip(data, io_mode=io_mode)
         filename = f"{problem_code}_THEMIS_TESTS.zip"
         return Response(
@@ -284,6 +293,9 @@ async def download_word(request: Request):
     try:
         data = await request.json()
         problem_code = data.get("problem", {}).get("problem_code", "PROBLEM").upper()
+
+        # Lazy import Word docx exporter
+        from docx_exporter import create_olympiad_docx
 
         docx_bytes = create_olympiad_docx(data, include_editorial=True)
         filename = f"{problem_code}_DE_THI_HSG.docx"

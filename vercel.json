@@ -1,5 +1,25 @@
 {
   "version": 2,
+  "headers": [
+    {
+      "source": "/(.*)\\.(js|css|ico|svg|png|jpg|woff2)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, s-maxage=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, s-maxage=0, must-revalidate"
+        }
+      ]
+    }
+  ],
   "builds": [
     {
       "src": "api/index.py",
@@ -10,6 +30,10 @@
     }
   ],
   "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "api/index.py"
+    },
     {
       "src": "/(.*)",
       "dest": "api/index.py"
