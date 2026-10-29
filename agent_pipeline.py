@@ -395,7 +395,7 @@ def detect_graph_problem(sample_in: str, input_format: str = "", topic_key: str 
     - s, t: start and target vertices if specified in header
     - weighted: whether edges have weights (3 tokens vs 2 tokens)
     - zero_indexed: whether vertices start from 0 instead of 1
-    - header_type: 'N', 'N_M', 'N_M_K', 'N_M_S_T'
+    - header_type: 'N', 'N_M', 'N_M_K', 'N_M_S_T', 'N_Q_TREE', 'N_THEN_Q_TREE'
     """
     lines = [l.strip() for l in sample_in.strip().split("\n") if l.strip()]
     if len(lines) < 2:
@@ -406,70 +406,94 @@ def detect_graph_problem(sample_in: str, input_format: str = "", topic_key: str 
         return None
 
     first_vals = [int(p) for p in first_line_parts]
-    sample_edges = lines[1:]
 
-    # Check if subsequent lines look like edges: 2 or 3 integers per line
-    edge_cols = [l.split() for l in sample_edges]
-    if not all(len(c) in [2, 3] and all(x.lstrip("-").isdigit() for x in c) for c in edge_cols):
-        return None
-
-    is_weighted = (len(edge_cols[0]) == 3)
-    num_sample_edges = len(sample_edges)
-
-    # Check for zero-indexed vertices
-    all_u_v = []
-    for c in edge_cols:
-        all_u_v.append(int(c[0]))
-        all_u_v.append(int(c[1]))
-    zero_indexed = (min(all_u_v) == 0) if all_u_v else False
-
-    n_val = None
-    m_val = None
-    s_val = 0 if zero_indexed else 1
-    t_val = None
-    header_type = None
-
-    if len(first_vals) == 1:
-        # Tree: N vertices, N-1 edges
-        if first_vals[0] - 1 == num_sample_edges or first_vals[0] == num_sample_edges:
-            n_val = first_vals[0]
-            m_val = num_sample_edges
-            t_val = n_val - 1 if zero_indexed else n_val
-            header_type = "N"
-    elif len(first_vals) == 2:
-        # N M
-        n_val = first_vals[0]
-        m_val = first_vals[1]
-        t_val = n_val - 1 if zero_indexed else n_val
-        header_type = "N_M"
-    elif len(first_vals) == 3:
-        # N M K or N M S
-        n_val = first_vals[0]
-        m_val = first_vals[1]
-        t_val = n_val - 1 if zero_indexed else n_val
-        header_type = "N_M_K"
-    elif len(first_vals) >= 4:
-        # N M S T
-        n_val = first_vals[0]
-        m_val = first_vals[1]
-        s_val = first_vals[2]
-        t_val = first_vals[3]
-        header_type = "N_M_S_T"
+    is_graph_topic = bool(
+        topic_key in ["do_thi", "do_thi_co_ban", "do_thi_nang_cao"] or 
+        "do_thi" in str(topic_key).lower() or
+        "graph" in str(topic_key).lower()
+    )
 
     text_corpus = (sample_in + " " + input_format + " " + topic_key).lower()
     graph_keywords = [
         "đồ thị", "cạnh", "đỉnh", "cây", "dijkstra", "đường đi", "ngắn nhất",
         "graph", "tree", "vertex", "vertices", "edge", "mst", "kruskal",
-        "bfs", "dfs", "u v", "u, v"
+        "bfs", "dfs", "u v", "u, v", "lca", "tarjan", "flow", "dinic", "luồng",
+        "cầu", "khớp", "scc", "hld", "2-sat", "mạng", "truy vấn", "tổ tiên",
+        "chu trình", "liên thông", "trọng số"
     ]
     has_keyword = any(kw in text_corpus for kw in graph_keywords)
 
-    if (topic_key == "do_thi") or has_keyword or (len(first_vals) in [2, 4] and m_val == num_sample_edges):
-        if n_val is None:
-            n_val = first_vals[0]
-            m_val = num_sample_edges
-            t_val = n_val - 1 if zero_indexed else n_val
-            header_type = "N_M" if len(first_vals) >= 2 else "N"
+    # Check Format B: Line 0 has N. Lines 1..N-1 are edges. Line N has Q. Lines N+1..N+Q are queries.
+    if len(first_vals) == 1 and first_vals[0] > 1:
+        n_cand = first_vals[0]
+        if n_cand < len(lines):
+            mid_line = lines[n_cand].split()
+            if len(mid_line) == 1 and mid_line[0].isdigit():
+                q_cand = int(mid_line[0])
+                if len(lines) >= n_cand + 1:
+                    edge_sample = lines[1:n_cand]
+                    weighted = any(len(l.split()) >= 3 for l in edge_sample)
+                    return {
+                        "n": n_cand,
+                        "m": n_cand - 1,
+                        "s": 1,
+                        "t": n_cand,
+                        "weighted": weighted,
+                        "zero_indexed": False,
+                        "header_type": "N_THEN_Q_TREE",
+                        "header_vals": first_vals,
+                        "is_tree_queries": True,
+                        "queries_count": q_cand
+                    }
+
+    sample_edges = lines[1:]
+    edge_cols = [l.split() for l in sample_edges]
+
+    # Verify edge lines are all numeric (if not graph topic, strict check)
+    if not all(all(x.lstrip("-").isdigit() for x in c) for c in edge_cols):
+        if not is_graph_topic:
+            return None
+
+    is_weighted = bool(edge_cols and len(edge_cols[0]) >= 3)
+    num_sample_edges = len(sample_edges)
+
+    # Check for zero-indexed vertices
+    all_u_v = []
+    for c in edge_cols:
+        if len(c) >= 2 and c[0].lstrip("-").isdigit() and c[1].lstrip("-").isdigit():
+            all_u_v.append(int(c[0]))
+            all_u_v.append(int(c[1]))
+    zero_indexed = (min(all_u_v) == 0) if all_u_v else False
+
+    n_val = first_vals[0] if first_vals else 5
+    m_val = first_vals[1] if len(first_vals) >= 2 else (num_sample_edges if num_sample_edges > 0 else 4)
+    s_val = 0 if zero_indexed else 1
+    t_val = n_val - 1 if zero_indexed else n_val
+    header_type = "N_M" if len(first_vals) >= 2 else "N"
+
+    if len(first_vals) == 3:
+        header_type = "N_M_K"
+    elif len(first_vals) >= 4:
+        s_val = first_vals[2]
+        t_val = first_vals[3]
+        header_type = "N_M_S_T"
+
+    is_tree_queries = False
+    queries_count = 0
+    if len(first_vals) == 2 and n_val > 1:
+        q_candidate = first_vals[1]
+        if num_sample_edges == (n_val - 1) + q_candidate:
+            is_tree_queries = True
+            m_val = n_val - 1
+            queries_count = q_candidate
+            header_type = "N_Q_TREE"
+        elif is_graph_topic and any(k in text_corpus for k in ["lca", "cây", "tree", "tổ tiên", "do_thi_nang_cao", "truy vấn"]):
+            is_tree_queries = True
+            m_val = n_val - 1
+            queries_count = q_candidate
+            header_type = "N_Q_TREE"
+
+    if is_graph_topic or has_keyword or is_tree_queries or (len(first_vals) in [2, 4] and m_val == num_sample_edges):
         return {
             "n": n_val,
             "m": m_val,
@@ -478,7 +502,9 @@ def detect_graph_problem(sample_in: str, input_format: str = "", topic_key: str 
             "weighted": is_weighted,
             "zero_indexed": zero_indexed,
             "header_type": header_type,
-            "header_vals": first_vals
+            "header_vals": first_vals,
+            "is_tree_queries": is_tree_queries,
+            "queries_count": queries_count
         }
 
     return None
@@ -486,9 +512,56 @@ def detect_graph_problem(sample_in: str, input_format: str = "", topic_key: str 
 def synthesize_graph_test(info: Dict[str, Any], test_num: int, subtask: int, override_scale: int = None, force_connected: bool = False) -> str:
     """
     Generates a realistic contest graph test case.
+    Supports Tree with Queries (LCA/path queries) and general connected graphs.
     Guarantees connectivity between S and T for all tests EXCEPT Test 6 (when force_connected=False).
     Test 6 is the unique deliberate unreachable test case (output -1).
     """
+    if info.get("is_tree_queries"):
+        # Synthesize Tree with Q Queries (e.g. LCA / Path queries)
+        if override_scale is not None:
+            n = max(4, override_scale)
+            q = max(3, int(n * 0.6))
+        elif test_num == 3:
+            n, q = 4, 2
+        elif test_num == 4:
+            n, q = 15, 8
+        elif test_num == 5:
+            n, q = 50, 25
+        elif test_num == 6:
+            # Special structure: line graph / chain tree
+            n, q = 40, 20
+        elif test_num == 7:
+            n, q = 150, 80
+        elif test_num == 8:
+            n, q = 300, 150
+        elif test_num == 9:
+            n, q = 600, 300
+        else: # test 10
+            n, q = 1200, 600
+
+        weighted = info.get("weighted", False)
+        edges = []
+        for i in range(2, n + 1):
+            if test_num == 6:
+                p = i - 1  # Line tree (chain) to stress-test recursion or binary lifting
+            else:
+                p = random.randint(1, i - 1)
+            if weighted:
+                w = random.randint(10**7, 10**8) if test_num == 8 else random.randint(1, 100)
+                edges.append(f"{p} {i} {w}")
+            else:
+                edges.append(f"{p} {i}")
+
+        queries = []
+        for _ in range(q):
+            u = random.randint(1, n)
+            v = random.randint(1, n)
+            queries.append(f"{u} {v}")
+
+        if info.get("header_type") == "N_THEN_Q_TREE":
+            return f"{n}\n" + "\n".join(edges) + f"\n{q}\n" + "\n".join(queries)
+        return f"{n} {q}\n" + "\n".join(edges) + "\n" + "\n".join(queries)
+
     if override_scale is not None:
         n = max(4, override_scale)
         m = max(n, int(n * 1.8))
@@ -624,6 +697,10 @@ def detect_grid_problem(sample_in: str, input_format: str = "", topic_key: str =
     - There are at least R subsequent lines
     - The first R subsequent lines contain C space-separated tokens or C characters
     """
+    # STRICT GUARD: Never classify Graph topics as a 2D Grid!
+    if "do_thi" in str(topic_key).lower() or "graph" in str(topic_key).lower():
+        return None
+
     lines = [l.strip() for l in sample_in.strip().split("\n") if l.strip()]
     if len(lines) < 3:
         return None
@@ -832,11 +909,29 @@ def smart_synthesize_input(sample1_in: str, input_format: str, topic_key: str, t
     if not lines:
         return "5\n1 2 3 4 5"
 
+    is_graph_topic = bool(
+        topic_key in ["do_thi", "do_thi_co_ban", "do_thi_nang_cao"] or 
+        "do_thi" in str(topic_key).lower() or
+        "graph" in str(topic_key).lower()
+    )
+
     # 0. Dedicated Graph & Tree Problem Engine
     # Prevents graph problems from having disconnected vertices or repeating '-1' across tests!
     graph_info = detect_graph_problem(sample1_in, input_format, topic_key)
     if graph_info:
         return synthesize_graph_test(graph_info, test_num, subtask, override_scale=override_scale)
+
+    if is_graph_topic:
+        # Ultimate fail-safe for graph topics: ensure connected tree/graph, never grid or random matrix!
+        scale = override_scale if override_scale is not None else CONTEST_SCALE_MAP.get(test_num, 50)
+        n = max(4, scale)
+        m = max(n, int(n * 1.5))
+        edges = []
+        for i in range(2, n + 1):
+            edges.append(f"{random.randint(1, i - 1)} {i}")
+        for _ in range(m - (n - 1)):
+            edges.append(f"{random.randint(1, n)} {random.randint(1, n)}")
+        return f"{n} {m}\n" + "\n".join(edges)
 
     # 0.1 Dedicated 2D Grid & Matrix Problem Engine
     grid_info = detect_grid_problem(sample1_in, input_format, topic_key)
@@ -998,8 +1093,8 @@ def smart_synthesize_input(sample1_in: str, input_format: str, topic_key: str, t
                 
         return "\n".join(header_lines) + "\n" + "\n".join(data_rows)
 
-    # 5. Grid Problem: N M on line 1, then N lines of grid
-    if len(lines) >= 3 and len(first_line_parts) >= 2 and first_line_parts[0].isdigit() and first_line_parts[1].isdigit():
+    # 5. Grid Problem: N M on line 1, then N lines of grid (Strict guard: never on graph topics!)
+    if not is_graph_topic and len(lines) >= 3 and len(first_line_parts) >= 2 and first_line_parts[0].isdigit() and first_line_parts[1].isdigit():
         grid_info_fallback = {
             "type": "tokens",
             "r": int(first_line_parts[0]),
@@ -1010,7 +1105,7 @@ def smart_synthesize_input(sample1_in: str, input_format: str, topic_key: str, t
         return synthesize_grid_test(grid_info_fallback, test_num, subtask, override_scale=scale)
 
     # 6. Fallback multi-line: scale count on line 0 and vary lines
-    if len(lines) > 2 and all_first_digits:
+    if not is_graph_topic and len(lines) > 2 and all_first_digits:
         n = scale
         header = f"{n} " + " ".join(first_line_parts[1:]) if len(first_line_parts) > 1 else f"{n}"
         template_lines = lines[1:]
@@ -1168,6 +1263,14 @@ Quy cách chuẩn mực của đề bài:
 
 ĐẦU RA BẮT BUỘC LÀ JSON thuần túy theo schema yêu cầu."""
 
+        ollama_topic_reinforcement = ""
+        if "do_thi" in str(topic_key).lower() or "graph" in str(topic_key).lower():
+            ollama_topic_reinforcement = (
+                f"\n- ĐẶC BIỆT LƯU Ý VỀ CHỦ ĐỀ ĐỒ THỊ/CÂY ({topic_info['name']}): "
+                f"Dữ liệu vào (Input format & Sample tests) BẮT BUỘC là đồ thị hoặc cây với danh sách cạnh u v hoặc u v w (hoặc cây kèm các truy vấn u v). "
+                f"TUYỆT ĐỐI KHÔNG sinh đề bài hay dữ liệu mẫu dạng ma trận lưới 2D hay bảng số nguyên!"
+            )
+
         stage1_prompt = f"""Hãy sáng tạo một bài toán Học sinh giỏi Tin học HOÀN TOÀN MỚI LẠ VÀ NGUYÊN BẢN (PHƯƠNG CHÂM: TUYỆT ĐỐI KHÔNG SAO CHÉP ĐỀ ĐÃ CÓ TRÊN MẠNG VÌ VI PHẠM BẢN QUYỀN) với các yêu cầu:
 - Chủ đề chính: {topic_info['name']} ({topic_info['description']})
 - Cấp độ đề thi: {diff_info['name']} ({diff_info['target_level']})
@@ -1176,7 +1279,7 @@ Quy cách chuẩn mực của đề bài:
 - Gợi ý bối cảnh thêm từ người dùng (nếu có): {custom_theme or 'Tự sáng tạo bối cảnh mới mẻ, thực tế hoặc gắn liền văn hóa Việt Nam'}
 - Mã bài mong muốn (nếu có): {problem_code_preference or 'Tự đặt mã bài súc tích 3-8 ký tự'}
 - Chế độ nộp bài: {'Đọc ghi file [MÃ].INP / [MÃ].OUT' if io_mode == 'file' else 'Chuẩn stdin / stdout'}
-- YÊU CẦU ĐẶC BIỆT: Đề bài, cốt truyện, dữ liệu và ví dụ phải là sáng tạo mới 100%, độc quyền chưa từng xuất hiện trên bất kỳ nền tảng chấm bài trực tuyến nào.
+- YÊU CẦU ĐẶC BIỆT: Đề bài, cốt truyện, dữ liệu và ví dụ phải là sáng tạo mới 100%, độc quyền chưa từng xuất hiện trên bất kỳ nền tảng chấm bài trực tuyến nào.{ollama_topic_reinforcement}
 
 Trả về định dạng JSON với cấu trúc:
 {{
