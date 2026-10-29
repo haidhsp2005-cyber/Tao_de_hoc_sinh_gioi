@@ -24,27 +24,54 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
 
-app = FastAPI(title="Olympiad Problem Forge", docs_url=None, redoc_url=None)
+app = FastAPI(title="Olympiad Problem Forge", redirect_slashes=False, docs_url=None, redoc_url=None)
 
 # Mount static folder
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
+def get_index_html():
     index_path = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as f:
-            html = f.read()
-        return HTMLResponse(
-            content=html,
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-                "Pragma": "no-cache",
-                "Expires": "0"
-            }
-        )
-    return HTMLResponse("<h1>Olympiad Problem Forge đang chuẩn bị giao diện...</h1>")
+            return f.read()
+    return "<h1>Olympiad Problem Forge đang chuẩn bị giao diện...</h1>"
+
+# Multi-path index handler ensuring any Vercel entrypoint path loads index.html
+@app.get("/", response_class=HTMLResponse)
+@app.get("/api", response_class=HTMLResponse)
+@app.get("/api/", response_class=HTMLResponse)
+@app.get("/api/index", response_class=HTMLResponse)
+@app.get("/api/index.py", response_class=HTMLResponse)
+async def index():
+    html = get_index_html()
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
+
+# SPA fallback handler: any non-API GET request loads index.html instead of {"detail":"Not Found"}
+@app.exception_handler(404)
+async def custom_404_handler(request: Request, exc):
+    path = request.url.path
+    if path.startswith("/api/"):
+        return JSONResponse({"success": False, "error": f"API endpoint not found: {path}"}, status_code=404)
+    # Check if requesting static assets directly
+    if path.startswith("/static/"):
+        file_subpath = path[len("/static/"):]
+        file_path = os.path.join(STATIC_DIR, file_subpath)
+        if os.path.exists(file_path):
+            return FileResponse(file_path)
+    return HTMLResponse(
+        content=get_index_html(),
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0"
+        }
+    )
 
 @app.get("/favicon.ico")
 async def favicon():
@@ -54,20 +81,25 @@ async def favicon():
     return Response(status_code=204)
 
 @app.get("/app.js")
-async def root_app_js():
+@app.get("/static/app.js")
+@app.get("/api/static/app.js")
+async def serve_app_js():
     js_path = os.path.join(STATIC_DIR, "app.js")
     if os.path.exists(js_path):
         return FileResponse(js_path, media_type="application/javascript")
     return Response(status_code=404)
 
 @app.get("/style.css")
-async def root_style_css():
+@app.get("/static/style.css")
+@app.get("/api/static/style.css")
+async def serve_style_css():
     css_path = os.path.join(STATIC_DIR, "style.css")
     if os.path.exists(css_path):
         return FileResponse(css_path, media_type="text/css")
     return Response(status_code=404)
 
 @app.get("/api/topics")
+@app.get("/topics")
 async def get_topics():
     gemini_models = [
         {"id": "gemini-3.6-flash", "name": "Google Gemini 3.6 Flash (Khuyên dùng Cloud - Nhanh & Chuẩn)", "default": True},
@@ -86,6 +118,7 @@ async def get_topics():
     })
 
 @app.get("/api/ollama/status")
+@app.get("/ollama/status")
 async def get_ollama_status():
     return JSONResponse({
         "success": True,
@@ -96,6 +129,7 @@ async def get_ollama_status():
     })
 
 @app.get("/api/sample-data")
+@app.get("/sample-data")
 async def get_sample_data():
     return JSONResponse({
         "success": True,
@@ -103,6 +137,7 @@ async def get_sample_data():
     })
 
 @app.get("/api/keys/status")
+@app.get("/keys/status")
 async def get_keys_status():
     try:
         km = KeyManager.from_server_env()
@@ -119,6 +154,7 @@ async def get_keys_status():
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 @app.get("/api/keys/load-server-keys")
+@app.get("/keys/load-server-keys")
 async def load_server_keys():
     try:
         km = KeyManager.from_server_env()
@@ -132,6 +168,7 @@ async def load_server_keys():
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 @app.post("/api/verify-key")
+@app.post("/verify-key")
 async def verify_key(request: Request):
     try:
         body = await request.json()
@@ -149,6 +186,7 @@ async def verify_key(request: Request):
     return JSONResponse(result)
 
 @app.post("/api/keys/verify-pool")
+@app.post("/keys/verify-pool")
 async def verify_pool(request: Request):
     try:
         body = await request.json()
@@ -171,6 +209,7 @@ async def verify_pool(request: Request):
     })
 
 @app.post("/api/generate")
+@app.post("/generate")
 async def generate_problem(request: Request):
     try:
         body = await request.json()
@@ -218,6 +257,7 @@ async def generate_problem(request: Request):
         }, status_code=500)
 
 @app.post("/api/download-zip")
+@app.post("/download-zip")
 async def download_zip(request: Request):
     try:
         data = await request.json()
@@ -239,6 +279,7 @@ async def download_zip(request: Request):
         return JSONResponse({"error": f"Lỗi tạo tệp ZIP: {str(e)}"}, status_code=500)
 
 @app.post("/api/download-word")
+@app.post("/download-word")
 async def download_word(request: Request):
     try:
         data = await request.json()
