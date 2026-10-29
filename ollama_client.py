@@ -76,9 +76,11 @@ class OllamaClient:
         if system_instruction:
             messages.append({"role": "system", "content": system_instruction})
         messages.append({"role": "user", "content": prompt})
-        # Optimized num_predict and num_ctx for local CPU inference speed
-        eff_tokens = min(max_tokens, 950) if max_tokens else 900
-        num_ctx = 2048
+        # Optimized num_predict and num_ctx for local inference:
+        # num_ctx: 4096 ensures problem statements and context are never truncated
+        # eff_tokens: up to 2048 ensures complete C++ and Python code generation
+        eff_tokens = min(max_tokens, 2048) if max_tokens else 1600
+        num_ctx = 4096
         cpu_threads = os.cpu_count() or 4
 
         payload: Dict[str, Any] = {
@@ -89,7 +91,9 @@ class OllamaClient:
             "options": {
                 "num_ctx": num_ctx,
                 "temperature": temperature,
-                "top_p": 0.85,
+                "top_p": 0.9,
+                "top_k": 40,
+                "repeat_penalty": 1.1,
                 "num_predict": eff_tokens,
                 "num_thread": cpu_threads
             }

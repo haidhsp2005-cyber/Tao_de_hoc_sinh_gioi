@@ -1227,7 +1227,7 @@ Trả về định dạng JSON với cấu trúc:
             system_instruction=stage1_system,
             json_mode=True,
             temperature=0.35,
-            max_tokens=850 if is_ollama else 16384
+            max_tokens=1600 if is_ollama else 16384
         )
 
         stage1_data = ensure_dict(res1.get("data"))
@@ -1238,7 +1238,7 @@ Trả về định dạng JSON với cấu trúc:
                 system_instruction=stage1_system,
                 json_mode=True,
                 temperature=0.2,
-                max_tokens=850 if is_ollama else 16384
+                max_tokens=1600 if is_ollama else 16384
             )
             stage1_data = ensure_dict(res1_retry.get("data"))
 
@@ -1255,7 +1255,7 @@ Trả về định dạng JSON với cấu trúc:
         has_subtasks = bool(stage1_data.get("subtasks") and len(stage1_data["subtasks"]) >= 2)
         has_samples = bool(stage1_data.get("sample_tests") and len(stage1_data["sample_tests"]) >= 1)
 
-        if not is_ollama and not (has_input and has_output and has_subtasks and has_samples):
+        if not (has_input and has_output and has_subtasks and has_samples):
             logger.info("Stage 1 missing fields detected due to truncation. Requesting dedicated completion...")
             comp_prompt = f"""Dưới đây là phần mở đầu của bài toán Học sinh giỏi Tin học vừa tạo:
 Tên bài: {problem_name}
@@ -1386,7 +1386,7 @@ Trả về duy nhất JSON:
                 system_instruction=stage2_unified_system,
                 json_mode=True,
                 temperature=0.15,
-                max_tokens=1000
+                max_tokens=1800
             )
             s2_dict = ensure_dict(res2.get("data"))
             stage2_data = {
@@ -1548,7 +1548,7 @@ Trả về duy nhất JSON:
         # 1. Guaranteed dedicated fallback for Python 3 first
         if not is_py_complete(py_code):
             logger.info("Python code missing, truncated, or syntax error. Requesting dedicated Python 3 generation...")
-            max_attempts_py = 1 if is_ollama else 2
+            max_attempts_py = 2
             for attempt_py in range(max_attempts_py):
                 try:
                     py_only_prompt = f"""Bạn là Grandmaster thi đấu CP. Hãy viết duy nhất MÃ NGUỒN PYTHON 3 CHUẨN HOÀN CHỈNH CHO BÀI TOÁN SAU:
@@ -1574,7 +1574,7 @@ YÊU CẦU BẮT BUỘC:
                         system_instruction="Chỉ xuất duy nhất mã nguồn Python 3 hoàn chỉnh trong khối ```python. Tuyệt đối không giải thích văn bản.",
                         json_mode=False,
                         temperature=0.1,
-                        max_tokens=700 if is_ollama else 8192
+                        max_tokens=1800 if is_ollama else 8192
                     )
                     text_py = res_py.get("text") or ""
                     cand_py = extract_py_code(text_py)
@@ -1589,7 +1589,7 @@ YÊU CẦU BẮT BUỘC:
         # 2. Guaranteed dedicated fallback for C++20 (referencing Python 3 if complete)
         if not is_cpp_complete(cpp_code):
             logger.info("C++ code missing or incomplete. Requesting dedicated C++20 generation...")
-            max_attempts_cpp = 1 if is_ollama else 2
+            max_attempts_cpp = 2
             for attempt_cpp in range(max_attempts_cpp):
                 try:
                     py_ref = f"\n\nTham khảo mã thuật toán Python 3 chuẩn sau:\n```python\n{py_code}\n```" if is_py_complete(py_code) else ""
@@ -1618,7 +1618,7 @@ YÊU CẦU BẮT BUỘC:
                         system_instruction="Chỉ xuất duy nhất mã nguồn C++20 hoàn chỉnh trong khối ```cpp. Tuyệt đối không giải thích.",
                         json_mode=False,
                         temperature=0.1,
-                        max_tokens=750 if is_ollama else 8192
+                        max_tokens=1800 if is_ollama else 8192
                     )
                     text_cpp = res_cpp.get("text") or ""
                     cand_cpp = extract_cpp_code(text_cpp)
@@ -1773,9 +1773,8 @@ Trả về duy nhất định dạng JSON:
         if not s1_detail["success"] or not s2_detail["success"]:
             err_msg = s1_detail.get("error") or s2_detail.get("error") or "Runtime error"
             logger.info(f"Python solver runtime issue detected: {err_msg}. Triggering automatic solver repair...")
-            if not is_ollama:
-                try:
-                    repair_prompt = f"""Mã nguồn Python giải bài toán {problem_name} [{problem_code}] bị lỗi khi thực thi trên Ví dụ mẫu:
+            try:
+                repair_prompt = f"""Mã nguồn Python giải bài toán {problem_name} [{problem_code}] bị lỗi khi thực thi trên Ví dụ mẫu:
 Lỗi: {err_msg}
 Ví dụ 1:
 Input:
@@ -1788,26 +1787,26 @@ Mã Python hiện tại:
 
 Hãy sửa lại mã Python 3 hoàn chỉnh, tối ưu, đọc input và in kết quả đúng format.
 Chỉ trả về JSON: {{"python_solution": "mã python 3 đã sửa"}}"""
-                    res_rep = await self.client.generate_content(
-                        prompt=repair_prompt,
-                        json_mode=True,
-                        temperature=0.1,
-                        max_tokens=4096
-                    )
-                    r_rep = ensure_dict(res_rep.get("data"))
-                    repaired_py = r_rep.get("python_solution") or extract_py_code(res_rep.get("text") or "")
-                    if repaired_py and is_py_complete(repaired_py):
-                        py_solution = normalize_python_code(repaired_py)
-                        stage2_data["python_solution"] = py_solution
-                        s1_detail = run_python_solver_detailed(py_solution, sample1_in, problem_code)
-                        s2_detail = run_python_solver_detailed(py_solution, sample2_in, problem_code)
-                        agent_logs.append({
-                            "stage": "AUTO_REPAIR",
-                            "title": "Tự Động Sửa Lỗi Mã Nguồn Python",
-                            "status": "completed",
-                            "message": "Đã tự động kiểm thử và sửa lỗi mã Python khi chạy thử nghiệm trên ví dụ mẫu."
-                        })
-                except Exception as e_rep:
+                res_rep = await self.client.generate_content(
+                    prompt=repair_prompt,
+                    json_mode=True,
+                    temperature=0.1,
+                    max_tokens=1800 if is_ollama else 4096
+                )
+                r_rep = ensure_dict(res_rep.get("data"))
+                repaired_py = r_rep.get("python_solution") or extract_py_code(res_rep.get("text") or "")
+                if repaired_py and is_py_complete(repaired_py):
+                    py_solution = normalize_python_code(repaired_py)
+                    stage2_data["python_solution"] = py_solution
+                    s1_detail = run_python_solver_detailed(py_solution, sample1_in, problem_code)
+                    s2_detail = run_python_solver_detailed(py_solution, sample2_in, problem_code)
+                    agent_logs.append({
+                        "stage": "AUTO_REPAIR",
+                        "title": "Tự Động Sửa Lỗi Mã Nguồn Python",
+                        "status": "completed",
+                        "message": "Đã tự động kiểm thử và sửa lỗi mã Python khi chạy thử nghiệm trên ví dụ mẫu."
+                    })
+            except Exception as e_rep:
                     logger.warning(f"Solver repair turn failed: {e_rep}")
 
         # -------------------------------------------------------------------------
