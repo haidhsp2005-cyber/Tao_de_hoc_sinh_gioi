@@ -178,7 +178,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // AI Engine Selector State (Ollama Local vs Gemini Cloud)
-    let currentEngine = localStorage.getItem("ai_engine") || "ollama";
+    const isCloudHost = window.location.hostname !== "localhost" && 
+                        window.location.hostname !== "127.0.0.1" && 
+                        !window.location.hostname.startsWith("192.168.");
+
+    let currentEngine = isCloudHost ? "gemini" : (localStorage.getItem("ai_engine") || "gemini");
     const btnEngineOllama = document.getElementById("btn-engine-ollama");
     const btnEngineGemini = document.getElementById("btn-engine-gemini");
     const boxGeminiKeys = document.getElementById("box-gemini-keys");
@@ -221,6 +225,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function updateEngineUI(engine, showToast = false) {
+        if (engine === "ollama" && (isCloudHost || !ollamaAvailable)) {
+            if (isCloudHost) {
+                if (showToast) {
+                    showNotification("Ollama Offline chỉ hoạt động khi bạn chạy cục bộ trên máy tính (qua file run.bat). Trên trang web đám mây Vercel, vui lòng dùng Google Gemini Cloud!", "warning");
+                }
+                engine = "gemini";
+            }
+        }
+
         currentEngine = engine;
         localStorage.setItem("ai_engine", engine);
 
@@ -352,7 +365,10 @@ document.addEventListener("DOMContentLoaded", () => {
             const dataOllama = await respOllama.json();
             ollamaAvailable = dataOllama.available === true;
             if (ollamaLiveChip) {
-                if (ollamaAvailable) {
+                if (isCloudHost) {
+                    ollamaLiveChip.textContent = `○ Chỉ chạy khi mở run.bat`;
+                    ollamaLiveChip.className = "text-[9px] font-normal text-slate-400";
+                } else if (ollamaAvailable) {
                     ollamaLiveChip.textContent = `● Đang chạy (${dataOllama.models.length} mô hình)`;
                     ollamaLiveChip.className = "text-[9px] font-medium text-emerald-300";
                 } else {
@@ -363,8 +379,8 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (e) {
             ollamaAvailable = false;
             if (ollamaLiveChip) {
-                ollamaLiveChip.textContent = `○ Không kết nối`;
-                ollamaLiveChip.className = "text-[9px] font-normal text-red-300";
+                ollamaLiveChip.textContent = isCloudHost ? `○ Chỉ chạy khi mở run.bat` : `○ Không kết nối`;
+                ollamaLiveChip.className = "text-[9px] font-normal text-slate-400";
             }
         }
 
@@ -386,8 +402,8 @@ document.addEventListener("DOMContentLoaded", () => {
             geminiKeysCount = 0;
         }
 
-        // Auto-select Gemini Cloud if local Ollama is offline and user has not explicitly forced Ollama
-        if (!ollamaAvailable && geminiKeysCount > 0 && !localStorage.getItem("ai_engine")) {
+        // Auto-select Gemini Cloud if on cloud host or local Ollama is offline
+        if (isCloudHost || (!ollamaAvailable && geminiKeysCount > 0)) {
             currentEngine = "gemini";
         }
 
@@ -945,6 +961,18 @@ document.addEventListener("DOMContentLoaded", () => {
     btnGenerate.addEventListener("click", async () => {
         if (btnGenerate.disabled) return;
 
+        if (currentEngine === "ollama") {
+            if (isCloudHost) {
+                alert("Mô hình Ollama Offline chỉ chạy được trên máy tính cá nhân (khi bạn mở file 'run.bat').\n\nTrên trang web đám mây Vercel, hệ thống tự động chuyển sang chế độ 'Online (Gemini)' để tạo đề siêu tốc bằng 20 API Key!");
+                updateEngineUI("gemini", true);
+                return;
+            }
+            if (!ollamaAvailable) {
+                alert("Không thể kết nối đến Ollama trên cổng 11434. Vui lòng mở ứng dụng Ollama hoặc chuyển sang chế độ 'Online (Gemini)' để tạo đề!");
+                return;
+            }
+        }
+
         if (currentEngine === "gemini" && serverKeysCount === 0) {
             alert("Chưa tìm thấy Google Gemini API Key trong tệp .env trên máy chủ. Vui lòng kiểm tra lại tệp .env!");
             if (btnOpenKeyPool) btnOpenKeyPool.click();
@@ -1046,7 +1074,18 @@ document.addEventListener("DOMContentLoaded", () => {
             clearInterval(stepTimer);
             clearInterval(timerInterval);
 
-            const res = await resp.json();
+            let res;
+            const contentType = resp.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+                res = await resp.json();
+            } else {
+                const rawText = await resp.text();
+                if (resp.status === 504 || rawText.includes("FUNCTION_INVOCATION_TIMEOUT") || rawText.includes("An error occurred")) {
+                    throw new Error("Máy chủ Vercel Serverless bị Timeout (>60s). Vui lòng thử lại với mô hình Google Gemini 3.6 Flash (siêu tốc ~10s) hoặc chạy file 'run.bat' trên máy tính để tạo đề không bị giới hạn thời gian!");
+                }
+                throw new Error(`Máy chủ đám mây trả về mã ${resp.status}: ${rawText.slice(0, 150)}`);
+            }
+
             if (!res.success) {
                 throw new Error(res.error || "Quá trình sinh đề thất bại.");
             }

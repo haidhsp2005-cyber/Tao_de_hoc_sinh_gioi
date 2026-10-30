@@ -186,6 +186,9 @@ class GeminiClient:
         model: str = "gemini-3.6-flash"
     ):
         self.model = model.strip() if model else "gemini-3.6-flash"
+        # Strict guard: normalize local/Ollama model names to Gemini default
+        if any(bad in self.model.lower() for bad in ["qwen", "deepseek", "llama", "coder", "mistral", "local"]):
+            self.model = "gemini-3.6-flash"
         self.rotation_events: List[str] = []
 
         if key_manager is not None:

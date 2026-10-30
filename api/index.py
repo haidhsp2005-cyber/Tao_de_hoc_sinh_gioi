@@ -214,6 +214,7 @@ async def verify_pool(request: Request):
 async def generate_problem(request: Request):
     try:
         body = await request.json()
+        ai_engine = (body.get("ai_engine") or body.get("engine") or "gemini").lower().strip()
         model = (body.get("model") or "").strip()
         topic = body.get("topic") or body.get("topic_key", "xu_ly_so")
         difficulty = body.get("difficulty") or body.get("difficulty_key", "hsg_tinh")
@@ -227,13 +228,31 @@ async def generate_problem(request: Request):
         from agent_pipeline import OlympiadAgentPipeline
 
         km = KeyManager.from_server_env()
+
+        fallback_used = False
+        fallback_msg = ""
+        # Check if client attempted to run Ollama/local model on Vercel
+        if ai_engine == "ollama" or any(bad in model.lower() for bad in ["qwen", "deepseek", "llama", "coder"]):
+            logger.info(f"[Vercel] Client requested Ollama ({model}) on Vercel. Redirecting to Gemini Cloud.")
+            if km.total_count() > 0:
+                fallback_used = True
+                fallback_msg = "Mô hình Ollama Offline chỉ chạy được trên máy tính của bạn (qua run.bat). Trên đám mây Vercel, hệ thống tự động sử dụng Google Gemini 3.6 Flash để tạo đề siêu tốc!"
+                ai_engine = "gemini"
+                model = "gemini-3.6-flash"
+            else:
+                return JSONResponse({
+                    "success": False,
+                    "error": "Mô hình Ollama Offline (Qwen 2.5) chỉ hoạt động khi bạn chạy phần mềm cục bộ trên máy tính qua file 'run.bat'. Trên trang web Vercel Cloud, máy chủ không thể kết nối đến máy tính của bạn. Vui lòng cấu hình GEMINI_API_KEY trên Vercel hoặc tải mã nguồn về chạy run.bat nhé!"
+                }, status_code=400)
+
         if km.total_count() == 0:
             return JSONResponse({
                 "success": False,
-                "error": "Chưa cấu hình GEMINI_API_KEY trên Vercel! Vui lòng truy cập Vercel Dashboard -> Project Settings -> Environment Variables -> thêm biến GEMINI_API_KEY."
+                "error": "Chưa cấu hình GEMINI_API_KEY trên Vercel! Vui lòng truy cập Vercel Dashboard -> Project Settings -> Environment Variables -> thêm biến GEMINI_API_KEY (hoặc chạy ứng dụng trên máy qua file run.bat)."
             }, status_code=400)
 
-        gemini_model = model or "gemini-3.6-flash"
+        VALID_MODELS = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+        gemini_model = model if model in VALID_MODELS else "gemini-3.6-flash"
         client = GeminiClient(key_manager=km, model=gemini_model)
         logger.info(f"[Vercel] Generating problem with GEMINI CLOUD ({gemini_model}) for topic={topic}, difficulty={difficulty}, pool_size={km.total_count()}")
 
@@ -250,8 +269,8 @@ async def generate_problem(request: Request):
             "success": True,
             "data": result,
             "ai_engine": "gemini",
-            "fallback_used": False,
-            "fallback_message": "",
+            "fallback_used": fallback_used,
+            "fallback_message": fallback_msg,
             "key_pool_status": km.get_status_summary(),
             "rotation_events": getattr(client, "rotation_events", [])
         })
